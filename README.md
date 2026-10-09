@@ -1,4 +1,4 @@
-# nu-lint binaries
+# nu-lint releases
 
 Prebuilt [nu-lint](https://codeberg.org/wvhulle/nu-lint) binaries for **macOS** (Apple Silicon and Intel) and **Windows** (x64).
 
@@ -26,8 +26,8 @@ To build a specific version by hand: *Actions → release → Run workflow*, and
 
 ```sh
 v=1.5.0; t=aarch64-apple-darwin
-curl -fsSLO "https://github.com/ChristianLemer/nu-lint-binaries/releases/download/v$v/nu-lint-$t.tar.gz"
-curl -fsSL  "https://github.com/ChristianLemer/nu-lint-binaries/releases/download/v$v/SHA256SUMS" | grep "nu-lint-$t" | shasum -a 256 -c
+curl -fsSLO "https://github.com/ChristianLemer/nu-lint-releases/releases/download/v$v/nu-lint-$t.tar.gz"
+curl -fsSL  "https://github.com/ChristianLemer/nu-lint-releases/releases/download/v$v/SHA256SUMS" | grep "nu-lint-$t" | shasum -a 256 -c
 tar -xzf "nu-lint-$t.tar.gz" -C ~/.local/bin
 ```
 
