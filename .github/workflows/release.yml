@@ -1,0 +1,116 @@
+# Build prebuilt nu-lint binaries for macOS and Windows, for every upstream
+# release that does not have them yet.
+#
+# Upstream (codeberg.org/wvhulle/nu-lint) publishes Linux musl binaries only.
+# This workflow compiles the crate as published on crates.io — no source
+# changes — and attaches the binaries to a release named after the version.
+
+name: release
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays, 05:17 UTC
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "nu-lint version to build (default: latest on crates.io)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      build: ${{ steps.v.outputs.build }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT" ]; then
+            version="$INPUT"
+          else
+            version=$(curl -fsSL -A "${GITHUB_REPOSITORY}" https://crates.io/api/v1/crates/nu-lint \
+              | jq -r .crate.max_stable_version)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$version already released — nothing to do"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-14 # cross-compiles natively on Apple Silicon
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - run: rustup target add "$TARGET"
+        shell: bash
+
+      - name: Build the crate as published
+        shell: bash
+        run: cargo install nu-lint --version "$VERSION" --locked --target "$TARGET" --root out
+
+      # Same archive layout as upstream's Linux releases — the binary at the
+      # archive root, named nu-lint-<target>.tar.gz — so one download recipe
+      # fits every platform.
+      - name: Package
+        shell: bash
+        run: |
+          exe=nu-lint; [[ "$TARGET" == *windows* ]] && exe=nu-lint.exe
+          tar -C out/bin -czf "nu-lint-$TARGET.tar.gz" "$exe"
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          mkdir smoke && tar -C smoke -xzf "nu-lint-$TARGET.tar.gz"
+          ./smoke/nu-lint* --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nu-lint-${{ matrix.target }}
+          path: nu-lint-${{ matrix.target }}.tar.gz
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Licence and checksums
+        run: |
+          curl -fsSL "https://codeberg.org/wvhulle/nu-lint/raw/tag/v$VERSION/LICENSE" -o dist/LICENSE \
+            || curl -fsSL "https://codeberg.org/wvhulle/nu-lint/raw/branch/main/LICENSE" -o dist/LICENSE
+          (cd dist && sha256sum nu-lint-*.tar.gz > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Publish
+        run: |
+          gh release create "v$VERSION" dist/* -R "$GITHUB_REPOSITORY" \
+            --title "nu-lint $VERSION" \
+            --notes "Unmodified build of [nu-lint $VERSION](https://crates.io/crates/nu-lint/$VERSION) from crates.io, for macOS (arm64, x64) and Windows (x64). Upstream: https://codeberg.org/wvhulle/nu-lint — MIT licence, included."
